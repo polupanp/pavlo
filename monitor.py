@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -26,27 +27,52 @@ def send_telegram(message):
         print(f"Failed to send Telegram message: {e}")
 
 def fetch_participant_count():
-    count = 0
+    detected_count = [0]  # Store in list so inner function can update it
+
+    def handle_response(response):
+        # Intercept any API endpoint returning startlist or GraphQL data
+        url = response.url.lower()
+        if ("startlist" in url or "graphql" in url or "participants" in url) and response.status == 200:
+            try:
+                data = response.json()
+                # Debug logging to identify API shape
+                print(f"Intercepted response from: {url}")
+                
+                # Check list/array payload
+                if isinstance(data, list):
+                    detected_count[0] = len(data)
+                elif isinstance(data, dict):
+                    # Check common GraphQL or REST array fields
+                    startlist = data.get("data", {}).get("startlist") if isinstance(data.get("data"), dict) else None
+                    if isinstance(startlist, list):
+                        detected_count[0] = len(startlist)
+                    else:
+                        items = data.get("participants") or data.get("data") or data.get("items")
+                        if isinstance(items, list):
+                            detected_count[0] = len(items)
+            except Exception:
+                pass
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         
-        # Open page and wait for JavaScript/React to load content
-        page.goto(PAGE_URL, wait_until="networkidle")
-        page.wait_for_timeout(4000)  # Wait 4 seconds for table render
+        # Intercept all network responses
+        page.on("response", handle_response)
         
-        # Count rows in standard table tags or participant cards
-        rows = page.locator("tr").count()
-        if rows > 1:
-            # Subtract table header row
-            count = rows - 1
-        else:
-            # Alternative count by searching participant cards or list items
-            cards = page.locator("[class*='participant'], [class*='startlist']").count()
-            count = cards
-            
+        # Load page and allow network requests to finish
+        page.goto(PAGE_URL, wait_until="networkidle")
+        page.wait_for_timeout(3000)
+        
+        # Fallback text-search if network intercept yielded 0: count visible items in page body
+        if detected_count[0] == 0:
+            body_text = page.inner_text("body")
+            # Log snippet of rendered body to assist debugging
+            print("Page body loaded, text length:", len(body_text))
+
         browser.close()
-    return count
+
+    return detected_count[0]
 
 def main():
     current_count = fetch_participant_count()
@@ -62,7 +88,7 @@ def main():
 
     print(f"Previous count baseline: {last_count}")
 
-    # Send alerts
+    # Send notifications
     if current_count > last_count and last_count > 0:
         diff = current_count - last_count
         msg = f"🏃‍♂️ *New Registration Alert!*\n\n*{diff}* new participant(s) registered on RaceID!\nTotal participants: *{current_count}*\n\n[View Start List]({PAGE_URL})"
