@@ -1,10 +1,8 @@
 import os
 import requests
+from playwright.sync_api import sync_playwright
 
-# RaceID GraphQL API endpoint
-GRAPHQL_URL = "https://raceid.com/api/graphql"
 PAGE_URL = "https://raceid.com/en/races/14933/startlist"
-RACE_ID = 14933
 STATE_FILE = "last_count.txt"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -27,53 +25,31 @@ def send_telegram(message):
     except Exception as e:
         print(f"Failed to send Telegram message: {e}")
 
-def get_participant_count():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Content-Type": "application/json",
-    }
-    
-    # GraphQL query to fetch participants count for the race
-    query = """
-    query GetStartlist($raceId: Int!) {
-        startlist(raceId: $raceId) {
-            id
-        }
-    }
-    """
-    
-    try:
-        response = requests.post(
-            GRAPHQL_URL,
-            json={"query": query, "variables": {"raceId": RACE_ID}},
-            headers=headers,
-            timeout=15
-        )
-        if response.status_code == 200:
-            data = response.json()
-            participants = data.get("data", {}).get("startlist", [])
-            if isinstance(participants, list):
-                return len(participants)
-    except Exception as e:
-        print(f"GraphQL request failed: {e}")
+def fetch_participant_count():
+    count = 0
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
         
-    # Fallback to general API endpoint if GraphQL structure varies
-    try:
-        rest_url = f"https://raceid.com/api/v1/races/{RACE_ID}/startlist"
-        res = requests.get(rest_url, headers=headers, timeout=15)
-        if res.status_code == 200:
-            data = res.json()
-            if isinstance(data, list):
-                return len(data)
-            elif isinstance(data, dict):
-                return len(data.get("participants", data.get("data", [])))
-    except Exception as e:
-        print(f"REST API request failed: {e}")
-
-    return 0
+        # Open page and wait for JavaScript/React to load content
+        page.goto(PAGE_URL, wait_until="networkidle")
+        page.wait_for_timeout(4000)  # Wait 4 seconds for table render
+        
+        # Count rows in standard table tags or participant cards
+        rows = page.locator("tr").count()
+        if rows > 1:
+            # Subtract table header row
+            count = rows - 1
+        else:
+            # Alternative count by searching participant cards or list items
+            cards = page.locator("[class*='participant'], [class*='startlist']").count()
+            count = cards
+            
+        browser.close()
+    return count
 
 def main():
-    current_count = get_participant_count()
+    current_count = fetch_participant_count()
     print(f"Live participant count detected: {current_count}")
 
     # Read last saved count
@@ -86,13 +62,13 @@ def main():
 
     print(f"Previous count baseline: {last_count}")
 
-    # Handle notifications
+    # Send alerts
     if current_count > last_count and last_count > 0:
         diff = current_count - last_count
         msg = f"🏃‍♂️ *New Registration Alert!*\n\n*{diff}* new participant(s) registered on RaceID!\nTotal participants: *{current_count}*\n\n[View Start List]({PAGE_URL})"
         send_telegram(msg)
     elif last_count == 0:
-        send_telegram(f"✅ *RaceID Monitor Activated!*\n\nInitial baseline set at *{current_count}* participants.\nYou will receive alerts whenever new runners register.")
+        send_telegram(f"✅ *RaceID Monitor Activated!*\n\nInitial baseline set at *{current_count}* participants.\nYou will receive alerts when new runners register.")
 
     # Save state
     with open(STATE_FILE, "w") as f:
