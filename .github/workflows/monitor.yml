@@ -35,7 +35,8 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git pull origin main --rebase
         touch last_count.txt
         git add last_count.txt
         git diff-index --quiet HEAD || git commit -m "Update participant count baseline"
-        git push
+        git push origin main
