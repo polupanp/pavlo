@@ -5,6 +5,9 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   check-registrations:
     runs-on: ubuntu-latest
@@ -32,6 +35,7 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        touch last_count.txt
         git add last_count.txt
-        git commit -m "Update participant count baseline" || exit 0
+        git diff-index --quiet HEAD || git commit -m "Update participant count baseline"
         git push
